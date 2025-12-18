@@ -1,8 +1,8 @@
 node_modules/
+auth_info_baileys/
 .wwebjs_auth/
 .wwebjs_cache/
 sessions/
 .env
-bot.log
-npm-debug.log
 *.log
+package-lock.json
