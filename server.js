@@ -31,12 +31,15 @@ function addActivity(message) {
 // ============================
 // Initialize WhatsApp Client
 // ============================
+
+const puppeteer = require('puppeteer');
+
 function initializeClient() {
     client = new Client({
         authStrategy: new LocalAuth({ dataPath: './.wwebjs_auth' }),
         puppeteer: {
+            executablePath: puppeteer.executablePath(),
             headless: true,
-            executablePath: '/usr/bin/chromium',
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
