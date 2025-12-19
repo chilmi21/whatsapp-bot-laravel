@@ -1,3 +1,8 @@
+// Ensure crypto module is available
+if (typeof global.crypto === 'undefined') {
+    global.crypto = require('crypto');
+}
+
 const express = require('express');
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
@@ -394,3 +399,4 @@ app.listen(PORT, () => {
     console.log(`Baileys version - Lightweight & Cloud-friendly`);
     console.log(`=======================================\n`);
 });
+
