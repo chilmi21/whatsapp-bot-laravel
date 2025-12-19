@@ -15,6 +15,7 @@ let qrCodeData = null;
 let isReady = false;
 let startTime = Date.now();
 let activityLogs = [];
+let connectionAttempts = 0;
 
 // ============================
 // Helper function for activity
@@ -34,48 +35,106 @@ function addActivity(message) {
 // Initialize WhatsApp Client
 // ============================
 async function connectToWhatsApp() {
-    const { state, saveCreds } = await useMultiFileAuthState('./auth_info_baileys');
-    const { version } = await fetchLatestBaileysVersion();
+    try {
+        connectionAttempts++;
+        addActivity(`Connection attempt #${connectionAttempts}`);
 
-    sock = makeWASocket({
-        version,
-        auth: state,
-        printQRInTerminal: false,
-        logger: P({ level: 'silent' }),
-        browser: ['Laravel Bot', 'Chrome', '1.0.0']
-    });
+        const { state, saveCreds } = await useMultiFileAuthState('./auth_info_baileys');
+        const { version } = await fetchLatestBaileysVersion();
 
-    // QR Code Event
-    sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
+        addActivity(`Using Baileys version: ${version.join('.')}`);
 
-        if (qr) {
-            qrCodeData = qr;
-            addActivity("QR Code diterima, menunggu scan");
-            qrcode.generate(qr, { small: true });
-        }
+        sock = makeWASocket({
+            version,
+            auth: state,
+            printQRInTerminal: false,
+            logger: P({ level: 'silent' }),
+            browser: ['Laravel Bot', 'Chrome', '1.0.0'],
+            connectTimeoutMs: 60000, // 60 detik timeout
+            defaultQueryTimeoutMs: undefined,
+            keepAliveIntervalMs: 30000,
+            markOnlineOnConnect: true
+        });
 
-        if (connection === 'close') {
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            
-            addActivity(`Connection closed. Reconnecting: ${shouldReconnect}`);
-            isReady = false;
-            qrCodeData = null;
+        // QR Code Event
+        sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect, qr } = update;
 
-            if (shouldReconnect) {
-                setTimeout(() => {
-                    connectToWhatsApp();
-                }, 3000);
+            if (qr) {
+                qrCodeData = qr;
+                addActivity("✅ QR Code diterima! Silahkan scan dengan WhatsApp");
+                qrcode.generate(qr, { small: true });
+                console.log('\n=== QR CODE READY ===');
+                console.log('Akses: /qr-image untuk mendapatkan QR code');
+                console.log('====================\n');
             }
-        } else if (connection === 'open') {
-            isReady = true;
-            qrCodeData = null;
-            addActivity("WhatsApp client siap digunakan");
-        }
-    });
 
-    // Save credentials when updated
-    sock.ev.on('creds.update', saveCreds);
+            if (connection === 'connecting') {
+                addActivity("🔄 Sedang mencoba connect ke WhatsApp...");
+            }
+
+            if (connection === 'close') {
+                const statusCode = lastDisconnect?.error?.output?.statusCode;
+                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+                
+                addActivity(`❌ Connection closed. Status: ${statusCode}, Reconnecting: ${shouldReconnect}`);
+                
+                // Log detail error
+                if (lastDisconnect?.error) {
+                    addActivity(`Error detail: ${lastDisconnect.error.message}`);
+                    console.error('Connection error:', lastDisconnect.error);
+                }
+
+                isReady = false;
+                
+                // Reset QR code hanya kalau bukan karena logout
+                if (shouldReconnect) {
+                    qrCodeData = null;
+                }
+
+                if (shouldReconnect) {
+                    // Exponential backoff: tunggu lebih lama setiap reconnect
+                    const delay = Math.min(3000 * Math.pow(1.5, Math.min(connectionAttempts, 5)), 30000);
+                    addActivity(`Reconnecting in ${delay / 1000} seconds...`);
+                    
+                    setTimeout(() => {
+                        connectToWhatsApp();
+                    }, delay);
+                } else {
+                    addActivity("🛑 Logged out. Tidak akan reconnect otomatis.");
+                    connectionAttempts = 0;
+                }
+            } else if (connection === 'open') {
+                isReady = true;
+                qrCodeData = null;
+                connectionAttempts = 0; // Reset counter
+                addActivity("✅ WhatsApp client berhasil terhubung!");
+                console.log('\n=== BOT CONNECTED ===');
+                console.log('Bot siap menerima dan mengirim pesan!');
+                console.log('====================\n');
+            }
+        });
+
+        // Save credentials when updated
+        sock.ev.on('creds.update', saveCreds);
+
+        // Messages update event (optional, untuk log pesan masuk)
+        sock.ev.on('messages.upsert', async ({ messages }) => {
+            const msg = messages[0];
+            if (!msg.key.fromMe && msg.message) {
+                addActivity(`Pesan masuk dari: ${msg.key.remoteJid}`);
+            }
+        });
+
+    } catch (error) {
+        addActivity(`❌ Error initializing client: ${error.message}`);
+        console.error('Init error:', error);
+        
+        // Retry setelah 5 detik
+        setTimeout(() => {
+            connectToWhatsApp();
+        }, 5000);
+    }
 }
 
 // Start client
@@ -90,6 +149,8 @@ app.get('/status', (req, res) => {
     res.json({
         status: 'online',
         ready: isReady,
+        qr_available: qrCodeData !== null,
+        connection_attempts: connectionAttempts,
         uptime: Math.floor((Date.now() - startTime) / 1000) + 's'
     });
 });
@@ -99,8 +160,10 @@ app.get('/info', (req, res) => {
     res.json({
         connected: isReady,
         qr_needed: qrCodeData !== null,
+        connection_attempts: connectionAttempts,
         uptime: Math.floor((Date.now() - startTime) / 1000) + 's',
-        library: 'baileys'
+        library: 'baileys',
+        version: '2.0.0'
     });
 });
 
@@ -134,7 +197,9 @@ app.get('/qr', async (req, res) => {
         res.json({
             success: false,
             qr: null,
-            message: 'QR code not ready yet. Please wait...'
+            message: 'QR code not ready yet. Please wait...',
+            connection_attempts: connectionAttempts,
+            hint: 'Bot is trying to connect. Check /activity for details.'
         });
     }
 });
@@ -163,7 +228,9 @@ app.get('/qr-image', async (req, res) => {
     } else {
         res.status(400).json({
             success: false,
-            message: 'QR code not ready yet.'
+            message: 'QR code not ready yet.',
+            connection_attempts: connectionAttempts,
+            hint: 'Bot is trying to connect. Check /activity for details.'
         });
     }
 });
@@ -232,7 +299,9 @@ app.post('/send-message', async (req, res) => {
 app.get('/activity', (req, res) => {
     res.json({
         success: true,
-        logs: activityLogs
+        logs: activityLogs,
+        total_logs: activityLogs.length,
+        connection_attempts: connectionAttempts
     });
 });
 
@@ -243,6 +312,7 @@ app.post('/logout', async (req, res) => {
             await sock.logout();
             isReady = false;
             qrCodeData = null;
+            connectionAttempts = 0;
             addActivity("Bot logged out successfully");
             
             // Reconnect setelah logout
@@ -268,6 +338,31 @@ app.post('/logout', async (req, res) => {
     }
 });
 
+// Force reconnect endpoint
+app.post('/reconnect', async (req, res) => {
+    try {
+        if (sock) {
+            sock.end();
+        }
+        connectionAttempts = 0;
+        isReady = false;
+        qrCodeData = null;
+        
+        addActivity("Force reconnect triggered");
+        connectToWhatsApp();
+        
+        res.json({
+            success: true,
+            message: 'Reconnecting...'
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Reconnect failed: ' + error.message
+        });
+    }
+});
+
 // Health check
 app.get('/', (req, res) => {
     res.json({
@@ -275,7 +370,18 @@ app.get('/', (req, res) => {
         version: '2.0.0',
         library: 'Baileys',
         status: isReady ? 'connected' : 'disconnected',
-        uptime: Math.floor((Date.now() - startTime) / 1000) + 's'
+        qr_available: qrCodeData !== null,
+        connection_attempts: connectionAttempts,
+        uptime: Math.floor((Date.now() - startTime) / 1000) + 's',
+        endpoints: {
+            status: 'GET /',
+            qr_code: 'GET /qr',
+            qr_image: 'GET /qr-image',
+            send_message: 'POST /send-message',
+            activity: 'GET /activity',
+            logout: 'POST /logout',
+            reconnect: 'POST /reconnect'
+        }
     });
 });
 
@@ -283,6 +389,8 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     addActivity(`WhatsApp Bot Server running on port ${PORT}`);
+    console.log(`\n=======================================`);
     console.log(`WhatsApp Bot Server running on port ${PORT}`);
     console.log(`Baileys version - Lightweight & Cloud-friendly`);
+    console.log(`=======================================\n`);
 });
