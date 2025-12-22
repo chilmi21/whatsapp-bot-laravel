@@ -106,7 +106,7 @@ async function connectToWhatsApp() {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
                 
-                addActivity(`❌ Connection closed. Status: ${statusCode}, Reconnecting: ${shouldReconnect}`);
+                // addActivity(`❌ Connection closed. Status: ${statusCode}, Reconnecting: ${shouldReconnect}`);
                 
                 // Log detail error
                 if (lastDisconnect?.error) {
@@ -465,6 +465,7 @@ app.listen(PORT, () => {
     console.log(`Baileys version - Lightweight & Cloud-friendly`);
     console.log(`=======================================\n`);
 });
+
 
 
 
