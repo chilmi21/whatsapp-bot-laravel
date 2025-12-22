@@ -403,7 +403,7 @@ app.post('/delete-session', async (req, res) => {
         if (fs.existsSync(authPath)) {
             // Hapus folder auth
             fs.rmSync(authPath, { recursive: true, force: true });
-            addActivity('✅ Session folder deleted');
+            // addActivity('✅ Session folder deleted');
             
             // Reset variables
             qrCodeData = null;
@@ -465,6 +465,7 @@ app.listen(PORT, () => {
     console.log(`Baileys version - Lightweight & Cloud-friendly`);
     console.log(`=======================================\n`);
 });
+
 
 
 
