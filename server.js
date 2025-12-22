@@ -71,7 +71,7 @@ async function connectToWhatsApp() {
         const { state, saveCreds } = await useMultiFileAuthState('./auth_info_baileys');
         const { version } = await fetchLatestBaileysVersion();
 
-        addActivity(`Using Baileys version: ${version.join('.')}`);
+        // addActivity(`Using Baileys version: ${version.join('.')}`);
 
         sock = makeWASocket({
             version,
@@ -465,6 +465,7 @@ app.listen(PORT, () => {
     console.log(`Baileys version - Lightweight & Cloud-friendly`);
     console.log(`=======================================\n`);
 });
+
 
 
 
