@@ -20,8 +20,6 @@ if (process.env.FORCE_DELETE_SESSION === 'true') {
     }
 }
 
-// ... rest of your existing code
-
 // Ensure crypto module is available
 if (typeof global.crypto === 'undefined') {
     global.crypto = require('crypto');
@@ -45,6 +43,9 @@ let isReady = false;
 let startTime = Date.now();
 let activityLogs = [];
 let connectionAttempts = 0;
+let qrRefreshInterval = null;
+let qrExpiryTime = null;
+const QR_EXPIRY_SECONDS = 40; // QR code expired setelah 40 detik
 
 // ============================
 // Helper function for activity
@@ -66,12 +67,9 @@ function addActivity(message) {
 async function connectToWhatsApp() {
     try {
         connectionAttempts++;
-        // addActivity(`Connection attempt #${connectionAttempts}`);
 
         const { state, saveCreds } = await useMultiFileAuthState('./auth_info_baileys');
         const { version } = await fetchLatestBaileysVersion();
-
-        // addActivity(`Using Baileys version: ${version.join('.')}`);
 
         sock = makeWASocket({
             version,
@@ -82,7 +80,10 @@ async function connectToWhatsApp() {
             connectTimeoutMs: 60000, // 60 detik timeout
             defaultQueryTimeoutMs: undefined,
             keepAliveIntervalMs: 30000,
-            markOnlineOnConnect: true
+            markOnlineOnConnect: true,
+            // ⭐ Tambahan untuk stabilitas
+            syncFullHistory: false,
+            getMessage: async () => undefined
         });
 
         // QR Code Event
@@ -91,11 +92,42 @@ async function connectToWhatsApp() {
 
             if (qr) {
                 qrCodeData = qr;
+                qrExpiryTime = Date.now() + (QR_EXPIRY_SECONDS * 1000);
+                
                 addActivity("✅ QR Code diterima! Silahkan scan dengan WhatsApp");
                 qrcode.generate(qr, { small: true });
                 console.log('\n=== QR CODE READY ===');
-                console.log('Akses: /qr-image untuk mendapatkan QR code');
+                console.log('QR code akan expired dalam 40 detik');
+                console.log('Akses: /qr atau /qr-image untuk mendapatkan QR code');
                 console.log('====================\n');
+                
+                // Clear previous interval kalau ada
+                if (qrRefreshInterval) {
+                    clearInterval(qrRefreshInterval);
+                }
+                
+                // Set interval untuk clear QR kalau expired
+                qrRefreshInterval = setInterval(() => {
+                    if (qrExpiryTime && Date.now() > qrExpiryTime) {
+                        addActivity("⏰ QR Code expired, meminta QR baru...");
+                        qrCodeData = null;
+                        qrExpiryTime = null;
+                        clearInterval(qrRefreshInterval);
+                        qrRefreshInterval = null;
+                        
+                        // Force regenerate QR dengan restart connection
+                        if (!isReady && sock) {
+                            try {
+                                sock.end();
+                            } catch (err) {
+                                console.error('Error ending socket:', err);
+                            }
+                            setTimeout(() => {
+                                connectToWhatsApp();
+                            }, 2000);
+                        }
+                    }
+                }, 5000); // Check setiap 5 detik
             }
 
             if (connection === 'connecting') {
@@ -106,20 +138,21 @@ async function connectToWhatsApp() {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
                 
-                // addActivity(`❌ Connection closed. Status: ${statusCode}, Reconnecting: ${shouldReconnect}`);
+                // Clear QR interval
+                if (qrRefreshInterval) {
+                    clearInterval(qrRefreshInterval);
+                    qrRefreshInterval = null;
+                }
                 
                 // Log detail error
                 if (lastDisconnect?.error) {
-                    // addActivity(`Error detail: ${lastDisconnect.error.message}`);
                     console.error('Connection error:', lastDisconnect.error);
+                    addActivity(`❌ Connection error: ${lastDisconnect.error.message}`);
                 }
 
                 isReady = false;
-                
-                // Reset QR code hanya kalau bukan karena logout
-                if (shouldReconnect) {
-                    qrCodeData = null;
-                }
+                qrCodeData = null;
+                qrExpiryTime = null;
 
                 if (shouldReconnect) {
                     // Exponential backoff: tunggu lebih lama setiap reconnect
@@ -130,13 +163,21 @@ async function connectToWhatsApp() {
                         connectToWhatsApp();
                     }, delay);
                 } else {
-                    addActivity("🛑 Logged out. Tidak akan reconnect otomatis.");
+                    addActivity("🛑 Logged out. Silahkan hapus session dan scan QR baru.");
                     connectionAttempts = 0;
                 }
             } else if (connection === 'open') {
                 isReady = true;
                 qrCodeData = null;
+                qrExpiryTime = null;
                 connectionAttempts = 0; // Reset counter
+                
+                // Clear QR interval
+                if (qrRefreshInterval) {
+                    clearInterval(qrRefreshInterval);
+                    qrRefreshInterval = null;
+                }
+                
                 addActivity("✅ WhatsApp client berhasil terhubung!");
                 console.log('\n=== BOT CONNECTED ===');
                 console.log('Bot siap menerima dan mengirim pesan!');
@@ -151,7 +192,7 @@ async function connectToWhatsApp() {
         sock.ev.on('messages.upsert', async ({ messages }) => {
             const msg = messages[0];
             if (!msg.key.fromMe && msg.message) {
-                addActivity(`Pesan masuk dari: ${msg.key.remoteJid}`);
+                addActivity(`📨 Pesan masuk dari: ${msg.key.remoteJid}`);
             }
         });
 
@@ -175,10 +216,13 @@ connectToWhatsApp();
 
 // Status endpoint
 app.get('/status', (req, res) => {
+    const secondsRemaining = qrExpiryTime ? Math.max(0, Math.floor((qrExpiryTime - Date.now()) / 1000)) : 0;
+    
     res.json({
         status: 'online',
         ready: isReady,
         qr_available: qrCodeData !== null,
+        qr_expires_in: secondsRemaining,
         connection_attempts: connectionAttempts,
         uptime: Math.floor((Date.now() - startTime) / 1000) + 's'
     });
@@ -186,9 +230,12 @@ app.get('/status', (req, res) => {
 
 // Info endpoint
 app.get('/info', (req, res) => {
+    const secondsRemaining = qrExpiryTime ? Math.max(0, Math.floor((qrExpiryTime - Date.now()) / 1000)) : 0;
+    
     res.json({
         connected: isReady,
         qr_needed: qrCodeData !== null,
+        qr_expires_in: secondsRemaining,
         connection_attempts: connectionAttempts,
         uptime: Math.floor((Date.now() - startTime) / 1000) + 's',
         library: 'baileys',
@@ -196,23 +243,25 @@ app.get('/info', (req, res) => {
     });
 });
 
-// QR Code endpoint (text)
+// QR Code endpoint (text + image data URL)
 app.get('/qr', async (req, res) => {
     if (qrCodeData) {
         try {
-            // Generate QR code as data URL
             const qrDataURL = await QRCode.toDataURL(qrCodeData);
+            const secondsRemaining = qrExpiryTime ? Math.max(0, Math.floor((qrExpiryTime - Date.now()) / 1000)) : 0;
             
             res.json({
                 success: true,
                 qr: qrCodeData,
                 qr_image: qrDataURL,
-                message: 'QR code available. Scan with WhatsApp.'
+                expires_in: secondsRemaining,
+                message: `QR code available. Expired dalam ${secondsRemaining} detik.`
             });
         } catch (error) {
             res.json({
                 success: true,
                 qr: qrCodeData,
+                expires_in: 0,
                 message: 'QR code available. Scan with WhatsApp.'
             });
         }
@@ -220,12 +269,14 @@ app.get('/qr', async (req, res) => {
         res.json({
             success: false,
             qr: null,
+            expires_in: 0,
             message: 'Already authenticated. No QR code needed.'
         });
     } else {
         res.json({
             success: false,
             qr: null,
+            expires_in: 0,
             message: 'QR code not ready yet. Please wait...',
             connection_attempts: connectionAttempts,
             hint: 'Bot is trying to connect. Check /activity for details.'
@@ -233,7 +284,7 @@ app.get('/qr', async (req, res) => {
     }
 });
 
-// QR Code endpoint (image)
+// QR Code endpoint (image PNG)
 app.get('/qr-image', async (req, res) => {
     if (qrCodeData) {
         try {
@@ -282,7 +333,7 @@ app.post('/send-message', async (req, res) => {
     const { phone, message } = req.body;
 
     if (!phone || !message) {
-        addActivity("Gagal kirim pesan: Phone atau message kosong");
+        addActivity("❌ Gagal kirim pesan: Phone atau message kosong");
         return res.status(400).json({
             success: false,
             message: 'Phone and message are required'
@@ -290,7 +341,7 @@ app.post('/send-message', async (req, res) => {
     }
 
     if (!isReady) {
-        addActivity("Gagal kirim pesan: WhatsApp client belum siap");
+        addActivity("❌ Gagal kirim pesan: WhatsApp client belum siap");
         return res.status(503).json({
             success: false,
             message: 'WhatsApp client is not ready yet'
@@ -308,14 +359,14 @@ app.post('/send-message', async (req, res) => {
 
         // Kirim pesan
         await sock.sendMessage(jid, { text: message });
-        addActivity(`Pesan dikirim ke ${jid}: "${message}"`);
+        addActivity(`✅ Pesan dikirim ke ${jid}: "${message.substring(0, 50)}..."`);
         
         res.json({
             success: true,
             message: 'Message sent successfully'
         });
     } catch (error) {
-        addActivity(`Error mengirim pesan ke ${phone}: ${error.message}`);
+        addActivity(`❌ Error mengirim pesan ke ${phone}: ${error.message}`);
         console.error('Error sending message:', error);
         res.status(500).json({
             success: false,
@@ -341,8 +392,15 @@ app.post('/logout', async (req, res) => {
             await sock.logout();
             isReady = false;
             qrCodeData = null;
+            qrExpiryTime = null;
             connectionAttempts = 0;
-            addActivity("Bot logged out successfully");
+            
+            if (qrRefreshInterval) {
+                clearInterval(qrRefreshInterval);
+                qrRefreshInterval = null;
+            }
+            
+            addActivity("🔓 Bot logged out successfully");
             
             // Reconnect setelah logout
             setTimeout(() => {
@@ -373,11 +431,18 @@ app.post('/reconnect', async (req, res) => {
         if (sock) {
             sock.end();
         }
+        
         connectionAttempts = 0;
         isReady = false;
         qrCodeData = null;
+        qrExpiryTime = null;
         
-        addActivity("Force reconnect triggered");
+        if (qrRefreshInterval) {
+            clearInterval(qrRefreshInterval);
+            qrRefreshInterval = null;
+        }
+        
+        addActivity("🔄 Force reconnect triggered");
         connectToWhatsApp();
         
         res.json({
@@ -395,18 +460,30 @@ app.post('/reconnect', async (req, res) => {
 // ⭐ DELETE SESSION ENDPOINT
 app.post('/delete-session', async (req, res) => {
     try {
-        const fs = require('fs');
-        const path = require('path');
-        
         const authPath = path.join(__dirname, 'auth_info_baileys');
+        
+        // Close existing connection first
+        if (sock) {
+            try {
+                sock.end();
+            } catch (err) {
+                console.error('Error ending socket:', err);
+            }
+        }
+        
+        if (qrRefreshInterval) {
+            clearInterval(qrRefreshInterval);
+            qrRefreshInterval = null;
+        }
         
         if (fs.existsSync(authPath)) {
             // Hapus folder auth
             fs.rmSync(authPath, { recursive: true, force: true });
-            // addActivity('✅ Session folder deleted');
+            addActivity('✅ Session folder deleted');
             
             // Reset variables
             qrCodeData = null;
+            qrExpiryTime = null;
             isReady = false;
             connectionAttempts = 0;
             
@@ -436,22 +513,27 @@ app.post('/delete-session', async (req, res) => {
 
 // Health check
 app.get('/', (req, res) => {
+    const secondsRemaining = qrExpiryTime ? Math.max(0, Math.floor((qrExpiryTime - Date.now()) / 1000)) : 0;
+    
     res.json({
         service: 'WhatsApp Bot API',
         version: '2.0.0',
         library: 'Baileys',
         status: isReady ? 'connected' : 'disconnected',
         qr_available: qrCodeData !== null,
+        qr_expires_in: secondsRemaining,
         connection_attempts: connectionAttempts,
         uptime: Math.floor((Date.now() - startTime) / 1000) + 's',
         endpoints: {
-            status: 'GET /',
+            status: 'GET /status',
+            info: 'GET /info',
             qr_code: 'GET /qr',
             qr_image: 'GET /qr-image',
             send_message: 'POST /send-message',
             activity: 'GET /activity',
             logout: 'POST /logout',
-            reconnect: 'POST /reconnect'
+            reconnect: 'POST /reconnect',
+            delete_session: 'POST /delete-session'
         }
     });
 });
@@ -459,7 +541,6 @@ app.get('/', (req, res) => {
 // Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    // addActivity(`WhatsApp Bot Server running on port ${PORT}`);
     console.log(`\n=======================================`);
     console.log(`WhatsApp Bot Server running on port ${PORT}`);
     console.log(`Baileys version - Lightweight & Cloud-friendly`);
