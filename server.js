@@ -97,6 +97,10 @@ async function connectToWhatsApp() {
                 addActivity("✅ QR Code diterima! Silahkan scan dengan WhatsApp");
                 qrcode.generate(qr, { small: true });
                 console.log('\n=== QR CODE READY ===');
+                console.log('QR Timestamp:', new Date().toISOString());
+                console.log('QR will expire at:', new Date(qrExpiryTime).toISOString());
+                console.log('====================\n');
+                console.log('\n=== QR CODE READY ===');
                 console.log('QR code akan expired dalam 40 detik');
                 console.log('Akses: /qr atau /qr-image untuk mendapatkan QR code');
                 console.log('====================\n');
@@ -546,3 +550,4 @@ app.listen(PORT, () => {
     console.log(`Baileys version - Lightweight & Cloud-friendly`);
     console.log(`=======================================\n`);
 });
+
