@@ -45,7 +45,7 @@ let activityLogs = [];
 let connectionAttempts = 0;
 let qrRefreshInterval = null;
 let qrExpiryTime = null;
-const QR_EXPIRY_SECONDS = 40; // QR code expired setelah 40 detik
+const QR_EXPIRY_SECONDS = 60; // QR code expired setelah 40 detik
 
 // ============================
 // Helper function for activity
@@ -108,19 +108,19 @@ async function connectToWhatsApp() {
 
         // QR Code Event
         sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
+        const { connection, lastDisconnect, qr, isNewLogin } = update;
     
         if (qr) {
-            // ⭐ HANYA TERIMA QR PERTAMA, ABAIKAN QR SELANJUTNYA
             if (!qrCodeData) {
                 qrCodeData = qr;
-                qrExpiryTime = Date.now() + (QR_EXPIRY_SECONDS * 1000);
+                qrExpiryTime = Date.now() + (60000); // ⭐ 60 detik (sync dengan qrTimeout)
                 
                 addActivity("✅ QR Code diterima! Silahkan scan dengan WhatsApp");
                 qrcode.generate(qr, { small: true });
                 console.log('\n=== QR CODE READY ===');
                 console.log('QR Timestamp:', new Date().toISOString());
                 console.log('QR will expire at:', new Date(qrExpiryTime).toISOString());
+                console.log('Please scan within 60 seconds');
                 console.log('====================\n');
                 
                 // Clear previous interval
@@ -128,32 +128,30 @@ async function connectToWhatsApp() {
                     clearInterval(qrRefreshInterval);
                 }
                 
-                // Set interval untuk clear QR kalau expired
-                qrRefreshInterval = setInterval(() => {
-                    if (qrExpiryTime && Date.now() > qrExpiryTime) {
-                        addActivity("⏰ QR Code expired, meminta QR baru...");
+                // ⭐ Set timeout untuk auto-restart kalau tidak di-scan
+                qrRefreshInterval = setTimeout(() => {
+                    if (!isReady) {
+                        addActivity("⏰ QR tidak di-scan, generating QR baru...");
                         qrCodeData = null;
                         qrExpiryTime = null;
-                        clearInterval(qrRefreshInterval);
-                        qrRefreshInterval = null;
                         
-                        // Force regenerate QR dengan restart connection
-                        if (!isReady && sock) {
+                        // Restart socket
+                        if (sock) {
                             try {
-                                sock.end();
+                                sock.end(undefined);
                             } catch (err) {
                                 console.error('Error ending socket:', err);
                             }
-                            setTimeout(() => {
-                                connectToWhatsApp();
-                            }, 2000);
                         }
+                        
+                        setTimeout(() => {
+                            connectToWhatsApp();
+                        }, 3000);
                     }
-                }, 5000);
+                }, 58000); // ⭐ 58 detik (2 detik sebelum timeout)
+                
             } else {
-                // ⭐ ABAIKAN QR BARU KALAU MASIH ADA QR YANG AKTIF
                 console.log('⚠️ QR code already exists, ignoring new QR');
-                addActivity("⚠️ QR sudah ada, menunggu scan...");
             }
         }
     
@@ -168,15 +166,16 @@ async function connectToWhatsApp() {
             
             console.log('\n❌ CONNECTION CLOSED ❌');
             console.log('Status Code:', statusCode);
+            console.log('Reason:', DisconnectReason[statusCode] || 'Unknown');
             console.log('Should Reconnect:', shouldReconnect);
             if (lastDisconnect?.error) {
                 console.log('Error:', lastDisconnect.error.message);
             }
             console.log('========================\n');
             
-            // Clear QR interval
+            // Clear QR interval/timeout
             if (qrRefreshInterval) {
-                clearInterval(qrRefreshInterval);
+                clearTimeout(qrRefreshInterval);
                 qrRefreshInterval = null;
             }
             
@@ -185,12 +184,27 @@ async function connectToWhatsApp() {
             qrExpiryTime = null;
             
             if (lastDisconnect?.error) {
-                console.error('Connection error:', lastDisconnect.error);
-                addActivity(`❌ Connection error: ${lastDisconnect.error.message}`);
+                const errorMsg = lastDisconnect.error.message;
+                
+                // ⭐ HANDLE SPECIFIC ERRORS
+                if (errorMsg.includes('QR refs attempts ended')) {
+                    addActivity("⚠️ QR timeout. Generating QR baru...");
+                    console.log('QR timeout detected, will regenerate...');
+                } else if (errorMsg.includes('Connection Closed')) {
+                    addActivity("⚠️ Connection closed by server");
+                } else {
+                    addActivity(`❌ Connection error: ${errorMsg}`);
+                }
             }
     
             if (shouldReconnect) {
-                const delay = Math.min(3000 * Math.pow(1.5, Math.min(connectionAttempts, 5)), 30000);
+                // ⭐ UNTUK QR TIMEOUT (408), RECONNECT CEPAT
+                const isQRTimeout = statusCode === 408 || 
+                                   lastDisconnect?.error?.message?.includes('QR refs');
+                
+                const delay = isQRTimeout ? 3000 : 
+                             Math.min(3000 * Math.pow(1.5, Math.min(connectionAttempts, 5)), 30000);
+                
                 addActivity(`Reconnecting in ${delay / 1000} seconds...`);
                 
                 setTimeout(() => {
@@ -206,14 +220,15 @@ async function connectToWhatsApp() {
             qrExpiryTime = null;
             connectionAttempts = 0;
             
-            // Clear QR interval
+            // Clear QR timeout
             if (qrRefreshInterval) {
-                clearInterval(qrRefreshInterval);
+                clearTimeout(qrRefreshInterval);
                 qrRefreshInterval = null;
             }
             
             console.log('\n✅ CONNECTION ESTABLISHED ✅');
             console.log('Timestamp:', new Date().toISOString());
+            console.log('Is New Login:', isNewLogin);
             console.log('============================\n');
             
             addActivity("✅ WhatsApp client berhasil terhubung!");
@@ -581,6 +596,7 @@ app.listen(PORT, () => {
     console.log(`Baileys version - Lightweight & Cloud-friendly`);
     console.log(`=======================================\n`);
 });
+
 
 
 
