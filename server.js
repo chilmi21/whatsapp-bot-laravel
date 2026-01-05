@@ -91,9 +91,11 @@ async function connectToWhatsApp() {
 
         // QR Code Event
         sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect, qr } = update;
-
-            if (qr) {
+        const { connection, lastDisconnect, qr } = update;
+    
+        if (qr) {
+            // ⭐ HANYA TERIMA QR PERTAMA, ABAIKAN QR SELANJUTNYA
+            if (!qrCodeData) {
                 qrCodeData = qr;
                 qrExpiryTime = Date.now() + (QR_EXPIRY_SECONDS * 1000);
                 
@@ -103,12 +105,8 @@ async function connectToWhatsApp() {
                 console.log('QR Timestamp:', new Date().toISOString());
                 console.log('QR will expire at:', new Date(qrExpiryTime).toISOString());
                 console.log('====================\n');
-                console.log('\n=== QR CODE READY ===');
-                console.log('QR code akan expired dalam 40 detik');
-                console.log('Akses: /qr atau /qr-image untuk mendapatkan QR code');
-                console.log('====================\n');
                 
-                // Clear previous interval kalau ada
+                // Clear previous interval
                 if (qrRefreshInterval) {
                     clearInterval(qrRefreshInterval);
                 }
@@ -134,63 +132,76 @@ async function connectToWhatsApp() {
                             }, 2000);
                         }
                     }
-                }, 5000); // Check setiap 5 detik
+                }, 5000);
+            } else {
+                // ⭐ ABAIKAN QR BARU KALAU MASIH ADA QR YANG AKTIF
+                console.log('⚠️ QR code already exists, ignoring new QR');
+                addActivity("⚠️ QR sudah ada, menunggu scan...");
             }
-
-            if (connection === 'connecting') {
-                addActivity("🔄 Sedang mencoba connect ke WhatsApp...");
+        }
+    
+        if (connection === 'connecting') {
+            addActivity("🔄 Sedang mencoba connect ke WhatsApp...");
+            console.log('⏳ Connection state: CONNECTING');
+        }
+    
+        if (connection === 'close') {
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            
+            console.log('\n❌ CONNECTION CLOSED ❌');
+            console.log('Status Code:', statusCode);
+            console.log('Should Reconnect:', shouldReconnect);
+            if (lastDisconnect?.error) {
+                console.log('Error:', lastDisconnect.error.message);
             }
-
-            if (connection === 'close') {
-                const statusCode = lastDisconnect?.error?.output?.statusCode;
-                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-                
-                // Clear QR interval
-                if (qrRefreshInterval) {
-                    clearInterval(qrRefreshInterval);
-                    qrRefreshInterval = null;
-                }
-                
-                // Log detail error
-                if (lastDisconnect?.error) {
-                    console.error('Connection error:', lastDisconnect.error);
-                    addActivity(`❌ Connection error: ${lastDisconnect.error.message}`);
-                }
-
-                isReady = false;
-                qrCodeData = null;
-                qrExpiryTime = null;
-
-                if (shouldReconnect) {
-                    // Exponential backoff: tunggu lebih lama setiap reconnect
-                    const delay = Math.min(3000 * Math.pow(1.5, Math.min(connectionAttempts, 5)), 30000);
-                    addActivity(`Reconnecting in ${delay / 1000} seconds...`);
-                    
-                    setTimeout(() => {
-                        connectToWhatsApp();
-                    }, delay);
-                } else {
-                    addActivity("🛑 Logged out. Silahkan hapus session dan scan QR baru.");
-                    connectionAttempts = 0;
-                }
-            } else if (connection === 'open') {
-                isReady = true;
-                qrCodeData = null;
-                qrExpiryTime = null;
-                connectionAttempts = 0; // Reset counter
-                
-                // Clear QR interval
-                if (qrRefreshInterval) {
-                    clearInterval(qrRefreshInterval);
-                    qrRefreshInterval = null;
-                }
-                
-                addActivity("✅ WhatsApp client berhasil terhubung!");
-                console.log('\n=== BOT CONNECTED ===');
-                console.log('Bot siap menerima dan mengirim pesan!');
-                console.log('====================\n');
+            console.log('========================\n');
+            
+            // Clear QR interval
+            if (qrRefreshInterval) {
+                clearInterval(qrRefreshInterval);
+                qrRefreshInterval = null;
             }
-        });
+            
+            isReady = false;
+            qrCodeData = null;
+            qrExpiryTime = null;
+            
+            if (lastDisconnect?.error) {
+                console.error('Connection error:', lastDisconnect.error);
+                addActivity(`❌ Connection error: ${lastDisconnect.error.message}`);
+            }
+    
+            if (shouldReconnect) {
+                const delay = Math.min(3000 * Math.pow(1.5, Math.min(connectionAttempts, 5)), 30000);
+                addActivity(`Reconnecting in ${delay / 1000} seconds...`);
+                
+                setTimeout(() => {
+                    connectToWhatsApp();
+                }, delay);
+            } else {
+                addActivity("🛑 Logged out. Silahkan hapus session dan scan QR baru.");
+                connectionAttempts = 0;
+            }
+        } else if (connection === 'open') {
+            isReady = true;
+            qrCodeData = null;
+            qrExpiryTime = null;
+            connectionAttempts = 0;
+            
+            // Clear QR interval
+            if (qrRefreshInterval) {
+                clearInterval(qrRefreshInterval);
+                qrRefreshInterval = null;
+            }
+            
+            console.log('\n✅ CONNECTION ESTABLISHED ✅');
+            console.log('Timestamp:', new Date().toISOString());
+            console.log('============================\n');
+            
+            addActivity("✅ WhatsApp client berhasil terhubung!");
+        }
+    });
 
         // Save credentials when updated
         sock.ev.on('creds.update', saveCreds);
@@ -553,5 +564,6 @@ app.listen(PORT, () => {
     console.log(`Baileys version - Lightweight & Cloud-friendly`);
     console.log(`=======================================\n`);
 });
+
 
 
