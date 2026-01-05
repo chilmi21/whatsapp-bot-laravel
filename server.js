@@ -77,16 +77,33 @@ async function connectToWhatsApp() {
         printQRInTerminal: false,
         logger: P({ level: 'silent' }),
         browser: ['Laravel Bot', 'Chrome', '1.0.0'],
-        connectTimeoutMs: 90000, // ⭐ NAIKKAN JADI 90 DETIK (dari 60)
-        defaultQueryTimeoutMs: undefined,
-        keepAliveIntervalMs: 30000,
-        markOnlineOnConnect: true,
+        
+        // ⭐ TIMEOUT SETTINGS - NAIKKAN SEMUA
+        connectTimeoutMs: 120000,        // 2 menit (dari 60 detik)
+        defaultQueryTimeoutMs: 60000,    // 1 menit
+        qrTimeout: 60000,                // ⭐ QR timeout 60 detik
+        
+        // ⭐ KEEP ALIVE & RETRY
+        keepAliveIntervalMs: 10000,      // Keep alive setiap 10 detik
+        retryRequestDelayMs: 1000,       // Delay retry 1 detik
+        maxMsgRetryCount: 10,            // Max retry 10x
+        
+        // ⭐ CONNECTION SETTINGS
+        markOnlineOnConnect: false,      // ⭐ Jangan mark online dulu
         syncFullHistory: false,
         getMessage: async () => undefined,
-        // ⭐ TAMBAHKAN INI
-        retryRequestDelayMs: 250,
-        maxMsgRetryCount: 5,
-        connectCooldownMs: 5000
+        
+        // ⭐ FIREWALL ISSUES FIX
+        fireAlreadyExistsError: false,
+        shouldIgnoreJid: () => false,
+        
+        // ⭐ PENTING: QR GENERATION OPTIONS
+        generateHighQualityLinkPreview: false,
+        patchMessageBeforeSending: (message) => message,
+        
+        // ⭐ WASocket options
+        emitOwnEvents: true,
+        downloadHistory: false
     });
 
         // QR Code Event
@@ -564,6 +581,7 @@ app.listen(PORT, () => {
     console.log(`Baileys version - Lightweight & Cloud-friendly`);
     console.log(`=======================================\n`);
 });
+
 
 
 
